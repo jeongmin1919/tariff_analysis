@@ -15,6 +15,99 @@ st.set_page_config(
 st.title("📊 우회수입 세율차 TOP10 자동 분석")
 st.markdown("---")
 
+# 세율 우선순위 매핑 (숫자가 낮을수록 우선순위 높음)
+TARIFF_PRIORITY = {
+    # 1순위: I~L 카테고리 (기간 우선)
+    '쿼터할당세': 1,
+    '상계관세': 1,
+    '보복관세': 1,
+    '긴급관세': 1,
+    '특정목적긴급관세': 1,
+    '농림축산물특별긴급관세': 1,
+    '조정관세(제6호조)': 1,
+    
+    # 2순위: FTA 협정들 (3~7순위, 날짜 우선)
+    '칠레': 2,
+    '싱가포르': 2,
+    'EFTA': 2,
+    '아세안': 2,
+    'ASEAN': 2,
+    '인도': 2,
+    'EU': 2,
+    '페루': 2,
+    '미국': 2,
+    '터키': 2,
+    '호주': 2,
+    '캐나다': 2,
+    '중국': 2,
+    '콜롬비아': 2,
+    '뉴질랜드': 2,
+    '베트남': 2,
+    '태국': 2,
+    '인도네시아': 2,
+    '말레이시아': 2,
+    '필리핀': 2,
+    '미얀마': 2,
+    '캄보디아': 2,
+    '라오스': 2,
+    '브루나이': 2,
+    '일본': 2,
+    
+    # 3순위: WTO 협정 (날짜 우선)
+    'WTO양허관세': 3,
+    'WTO개도국의양허관세': 3,
+    '일반특혜관세': 3,
+    '유엔무역개발협의회': 3,
+    '특정국가관세협상': 3,
+    
+    # 4순위: 농림축산물양허관세 (W1=추천, W2=미추천)
+    '농림축산물양허관세(추천)': 4,      # W1
+    '농림축산물양허관세(미추천)': 4,    # W2
+    '농림축산물양허관세': 4,
+    'WTO일반양허관세': 4,
+    'W1': 4,
+    'W2': 4,
+    
+    # 5순위: 아태무역협정관세
+    '아태무역협정관세': 5,
+    'F2': 5,
+    
+    # 6순위: 조정관세
+    '조정관세': 6,
+    
+    # 7순위: 탄력관세
+    '탄력관세': 7,
+    'P': 7,
+    
+    # 8순위: 최빈개발상공예품특혜관세
+    '최빈개발상공예품특혜관세': 8,
+    'R': 8,
+    
+    # 9순위: 잠정관세
+    '잠정관세': 9,
+    'B': 9,
+    
+    # 10순위: 기본세율 (최하위)
+    '기본세율': 10,
+    'A': 10,
+}
+
+def get_tariff_priority(agreement_name):
+    """협정명에서 우선순위 반환"""
+    agreement_name = str(agreement_name).strip()
+    
+    # 정확히 일치하는 것 찾기
+    if agreement_name in TARIFF_PRIORITY:
+        return TARIFF_PRIORITY[agreement_name]
+    
+    # 부분 일치로 찾기
+    for key, priority in TARIFF_PRIORITY.items():
+        if key in agreement_name:
+            return priority
+    
+    # 매칭 안되면 중간 우선순위
+    return 5
+
 # 데이터 로드 함수
 @st.cache_data
 def load_json_data(filepath):
@@ -59,19 +152,19 @@ def load_json_data(filepath):
         st.error(f"파일 로드 중 오류 발생: {filepath}\n오류: {str(e)}")
         return None
 
-# FTA 협정 매핑 (국가별) - RCEP 제외
+# FTA 협정 매핑 (국가별)
 FTA_MAPPING = {
     '중국': ['중국'],
-    '베트남': ['베트남', 'ASEAN'],
-    '태국': ['태국', 'ASEAN'],
-    '인도네시아': ['인도네시아', 'ASEAN'],
-    '말레이시아': ['말레이시아', 'ASEAN'],
-    '싱가포르': ['싱가포르', 'ASEAN'],
-    '필리핀': ['필리핀', 'ASEAN'],
-    '미얀마': ['미얀마', 'ASEAN'],
-    '캄보디아': ['캄보디아', 'ASEAN'],
-    '라오스': ['라오스', 'ASEAN'],
-    '브루나이': ['브루나이', 'ASEAN'],
+    '베트남': ['베트남', 'ASEAN', '아세안'],
+    '태국': ['태국', 'ASEAN', '아세안'],
+    '인도네시아': ['인도네시아', 'ASEAN', '아세안'],
+    '말레이시아': ['말레이시아', 'ASEAN', '아세안'],
+    '싱가포르': ['싱가포르', 'ASEAN', '아세안'],
+    '필리핀': ['필리핀', 'ASEAN', '아세안'],
+    '미얀마': ['미얀마', 'ASEAN', '아세안'],
+    '캄보디아': ['캄보디아', 'ASEAN', '아세안'],
+    '라오스': ['라오스', 'ASEAN', '아세안'],
+    '브루나이': ['브루나이', 'ASEAN', '아세안'],
     '일본': ['일본'],
     '호주': ['호주'],
     '뉴질랜드': ['뉴질랜드'],
@@ -83,13 +176,57 @@ FTA_MAPPING = {
     '콜롬비아': ['콜롬비아'],
 }
 
+def parse_tariff_rate(rate_str):
+    """세율 문자열을 숫자로 파싱 (복합세율 처리 포함)"""
+    try:
+        rate_str = str(rate_str).strip()
+        
+        # 빈 값 또는 null 처리
+        if rate_str == '' or rate_str.lower() == 'null':
+            return 0.0
+        
+        # "360% 또는 1,800원" 같은 복합세율 처리
+        # "또는", "or", "/" 등으로 구분된 경우 첫 번째 퍼센트 값 추출
+        if '또는' in rate_str or 'or' in rate_str.lower() or '/' in rate_str:
+            # % 기호가 있는 부분만 추출
+            parts = rate_str.replace('/', ' ').replace('또는', ' ').replace('or', ' ').split()
+            for part in parts:
+                if '%' in part:
+                    cleaned = part.replace('%', '').strip()
+                    try:
+                        return float(cleaned)
+                    except:
+                        continue
+        
+        # 일반적인 경우: "50%" → 50.0
+        cleaned = rate_str.replace('%', '').strip()
+        
+        # 쉼표 제거 (예: "1,800" → "1800")
+        cleaned = cleaned.replace(',', '')
+        
+        # 숫자가 아닌 문자가 포함된 경우 (원, won 등)
+        # 첫 번째 숫자 부분만 추출
+        import re
+        match = re.match(r'^([0-9.]+)', cleaned)
+        if match:
+            return float(match.group(1))
+        
+        return float(cleaned)
+        
+    except Exception as e:
+        return 0.0
+
 def get_hs6_from_hs10(hs10):
     """HS10에서 HS6 추출"""
     return str(hs10)[:6]
 
-def get_min_fta_rate(tariff_data, hs10, country, is_mfn=False):
-    """특정 국가의 최소 FTA 세율 찾기 - 모든 가능한 협정 비교"""
-    rates = []
+def get_applicable_rate_with_priority(tariff_data, hs10, country, is_mfn=False):
+    """우선순위를 고려한 적용 세율 찾기
+    
+    Returns:
+        tuple: (적용세율, 협정명, 원본FTA세율) 또는 None
+    """
+    candidates = []  # (세율, 우선순위, 협정명)
     
     for item in tariff_data:
         item_hs10 = str(item.get('품목번호 10단위', '')).strip()
@@ -100,32 +237,50 @@ def get_min_fta_rate(tariff_data, hs10, country, is_mfn=False):
         agreement = item.get('협정명', '').strip()
         rate_str = str(item.get('관세율', '0')).strip()
         
-        # 세율 파싱
-        try:
-            # '%' 제거하고 숫자만 추출
-            rate_str = rate_str.replace('%', '').strip()
-            if rate_str == '' or rate_str == 'null':
-                rate = 0.0
-            else:
-                rate = float(rate_str)
+        # 세율 파싱 (복합세율 처리)
+        rate = parse_tariff_rate(rate_str)
+        
+        # MFN 세율: 기본세율 + 기본세율보다 우선순위 높은 모든 세율 (W1 제외)
+        if is_mfn:
+            # W1은 추천받지 않았다는 전제로 제외
+            # '농림축산물양허관세(추천)' = W1 제외
+            if 'W1' in agreement or agreement == 'WTO일반양허관세' or '(추천)' in agreement:
+                continue
             
-            # MFN 세율
-            if is_mfn and agreement == '기본세율':
-                rates.append(rate)
-            
-            # FTA 세율 - ASEAN 국가는 모든 가능한 협정 확인
-            elif not is_mfn and country in FTA_MAPPING:
-                for fta in FTA_MAPPING[country]:
-                    if fta in agreement:
-                        rates.append(rate)
-                        # break 제거 - 모든 협정을 확인해야 함
-        except Exception as e:
-            continue
+            # FTA 협정은 MFN에서 제외
+            if 'FTA' in agreement or 'fta' in agreement.lower():
+                continue
+                
+            priority = get_tariff_priority(agreement)
+            # 기본세율(우선순위 10) 이하인 모든 세율을 후보에 추가
+            # W2(우선순위 4)는 기본세율보다 우선하므로 포함됨
+            if priority <= 10:
+                candidates.append((rate, priority, agreement))
+        
+        # FTA 세율 - 해당 국가의 모든 가능한 협정 확인
+        elif not is_mfn and country in FTA_MAPPING:
+            for fta in FTA_MAPPING[country]:
+                if fta in agreement:
+                    priority = get_tariff_priority(agreement)
+                    candidates.append((rate, priority, agreement))
     
-    return min(rates) if rates else None
+    if not candidates:
+        return None
+    
+    # 우선순위 정렬: 1) 우선순위 낮은 순(숫자), 2) 같은 우선순위면 세율 낮은 순
+    candidates.sort(key=lambda x: (x[1], x[0]))
+    
+    # 최우선 후보 반환
+    applied_rate, priority, applied_agreement = candidates[0]
+    
+    # FTA의 경우 원본 세율도 함께 반환
+    if not is_mfn:
+        return (applied_rate, applied_agreement, applied_rate)
+    else:
+        return (applied_rate, applied_agreement, None)
 
 def calculate_tariff_difference(tariff_data, origin_country, transit_country):
-    """세율차 계산 - FTA 세율 원본 표시"""
+    """세율차 계산 - 우선순위 적용"""
     results = []
     hs10_set = set()
     
@@ -157,33 +312,137 @@ def calculate_tariff_difference(tariff_data, origin_country, transit_country):
         if not product_name:
             continue
         
-        # MFN 세율
-        mfn_rate = get_min_fta_rate(tariff_data, hs10, None, is_mfn=True)
-        if mfn_rate is None:
+        # MFN 세율 (FTA 특혜 없이 적용 가능한 최소세율)
+        mfn_result = get_applicable_rate_with_priority(tariff_data, hs10, None, is_mfn=True)
+        if mfn_result is None:
             continue
         
+        mfn_rate, mfn_agreement, _ = mfn_result
         processed += 1
         
-        # 원산지국 FTA 세율 (모든 가능한 협정 중 최소값)
-        origin_fta_raw = get_min_fta_rate(tariff_data, hs10, origin_country)
+        # 원산지국 FTA 세율 (우선순위 고려)
+        origin_fta_result = get_applicable_rate_with_priority(tariff_data, hs10, origin_country)
         
-        # 경유국 FTA 세율 (모든 가능한 협정 중 최소값)
-        transit_fta_raw = get_min_fta_rate(tariff_data, hs10, transit_country)
+        # 경유국 FTA 세율 (우선순위 고려)
+        transit_fta_result = get_applicable_rate_with_priority(tariff_data, hs10, transit_country)
         
-        # 표시용: FTA 세율 원본 그대로 표시
-        origin_fta_display = origin_fta_raw if origin_fta_raw is not None else mfn_rate
-        transit_fta_display = transit_fta_raw if transit_fta_raw is not None else mfn_rate
+        # ===== 직수출 세율 결정 (MFN 후보 + 원산지국 FTA 후보 합쳐서 우선순위 적용) =====
+        all_origin_candidates = []
         
-        # 계산용: 실제 적용 세율 = min(MFN, FTA)
-        if origin_fta_raw is not None:
-            direct_rate = min(mfn_rate, origin_fta_raw)
+        # MFN 후보들 수집 (W1 제외)
+        for item in tariff_data:
+            item_hs10 = str(item.get('품목번호 10단위', '')).strip()
+            if item_hs10 != str(hs10):
+                continue
+            
+            agreement = item.get('협정명', '').strip()
+            rate_str = str(item.get('관세율', '0')).strip()
+            
+            # 세율 파싱 (복합세율 처리)
+            rate = parse_tariff_rate(rate_str)
+            
+            # W1 제외, 우선순위 10 이하인 모든 세율
+            # '농림축산물양허관세(추천)' = W1 제외
+            if 'W1' in agreement or agreement == 'WTO일반양허관세' or '(추천)' in agreement:
+                continue
+            
+            # FTA 협정은 MFN에서 제외
+            if 'FTA' in agreement or 'fta' in agreement.lower():
+                continue
+            
+            priority = get_tariff_priority(agreement)
+            if priority <= 10:
+                all_origin_candidates.append((rate, priority, agreement))
+        
+        # 원산지국 FTA 후보들 추가
+        if origin_country in FTA_MAPPING:
+            for item in tariff_data:
+                item_hs10 = str(item.get('품목번호 10단위', '')).strip()
+                if item_hs10 != str(hs10):
+                    continue
+                
+                agreement = item.get('협정명', '').strip()
+                rate_str = str(item.get('관세율', '0')).strip()
+                
+                # 세율 파싱 (복합세율 처리)
+                rate = parse_tariff_rate(rate_str)
+                
+                for fta in FTA_MAPPING[origin_country]:
+                    if fta in agreement:
+                        priority = get_tariff_priority(agreement)
+                        all_origin_candidates.append((rate, priority, agreement))
+        
+        # 우선순위 정렬 후 최우선 선택
+        if all_origin_candidates:
+            all_origin_candidates.sort(key=lambda x: (x[1], x[0]))
+            direct_rate, _, origin_applied_agreement = all_origin_candidates[0]
         else:
-            direct_rate = mfn_rate
+            continue
         
-        if transit_fta_raw is not None:
-            indirect_rate = min(mfn_rate, transit_fta_raw)
+        # 원산지국 FTA 표시용 (원본 FTA 세율)
+        if origin_fta_result is not None:
+            origin_fta_display, _, _ = origin_fta_result
         else:
-            indirect_rate = mfn_rate
+            origin_fta_display = mfn_rate
+        
+        # ===== 우회세율 결정 (MFN 후보 + 경유국 FTA 후보 합쳐서 우선순위 적용) =====
+        all_transit_candidates = []
+        
+        # MFN 후보들 수집 (W1 제외)
+        for item in tariff_data:
+            item_hs10 = str(item.get('품목번호 10단위', '')).strip()
+            if item_hs10 != str(hs10):
+                continue
+            
+            agreement = item.get('협정명', '').strip()
+            rate_str = str(item.get('관세율', '0')).strip()
+            
+            # 세율 파싱 (복합세율 처리)
+            rate = parse_tariff_rate(rate_str)
+            
+            # W1 제외, 우선순위 10 이하인 모든 세율
+            # '농림축산물양허관세(추천)' = W1 제외
+            if 'W1' in agreement or agreement == 'WTO일반양허관세' or '(추천)' in agreement:
+                continue
+            
+            # FTA 협정은 MFN에서 제외
+            if 'FTA' in agreement or 'fta' in agreement.lower():
+                continue
+            
+            priority = get_tariff_priority(agreement)
+            if priority <= 10:
+                all_transit_candidates.append((rate, priority, agreement))
+        
+        # 경유국 FTA 후보들 추가
+        if transit_country in FTA_MAPPING:
+            for item in tariff_data:
+                item_hs10 = str(item.get('품목번호 10단위', '')).strip()
+                if item_hs10 != str(hs10):
+                    continue
+                
+                agreement = item.get('협정명', '').strip()
+                rate_str = str(item.get('관세율', '0')).strip()
+                
+                # 세율 파싱 (복합세율 처리)
+                rate = parse_tariff_rate(rate_str)
+                
+                for fta in FTA_MAPPING[transit_country]:
+                    if fta in agreement:
+                        priority = get_tariff_priority(agreement)
+                        all_transit_candidates.append((rate, priority, agreement))
+        
+        # 우선순위 정렬 후 최우선 선택
+        if all_transit_candidates:
+            all_transit_candidates.sort(key=lambda x: (x[1], x[0]))
+            indirect_rate, _, transit_applied_agreement = all_transit_candidates[0]
+        else:
+            continue
+        
+        # 경유국 FTA 표시용 (원본 FTA 세율)
+        if transit_fta_result is not None:
+            transit_fta_display, _, _ = transit_fta_result
+        else:
+            transit_fta_display = mfn_rate
         
         # 세율차 계산
         rate_diff = direct_rate - indirect_rate
@@ -199,7 +458,9 @@ def calculate_tariff_difference(tariff_data, origin_country, transit_country):
                 '품명': product_name,
                 'MFN': mfn_rate,
                 '원산지국_FTA': origin_fta_display,
+                '원산지_협정': origin_applied_agreement,
                 '경유국_FTA': transit_fta_display,
+                '경유국_협정': transit_applied_agreement,
                 '직수출세율': direct_rate,
                 '우회세율': indirect_rate,
                 '세율차': rate_diff,
@@ -245,6 +506,14 @@ def get_import_trend(import_data, hs6, transit_country):
             except:
                 continue
     
+    # 증가율 계산 (2022 대비 2024)
+    if years_data[2022] > 0:
+        growth_rate = ((years_data[2024] - years_data[2022]) / years_data[2022]) * 100
+    elif years_data[2024] > 0:
+        growth_rate = 999.9  # 2022년 0에서 2024년 증가 → 매우 높은 증가율
+    else:
+        growth_rate = 0.0
+    
     # 추이 판정 및 위험도 점수 계산
     if years_data[2024] > years_data[2022]:
         trend = "증가"
@@ -265,7 +534,8 @@ def get_import_trend(import_data, hs6, transit_country):
         '2024': years_data[2024],
         '추이': trend,
         '위험도': risk,
-        'risk_score': risk_score
+        'risk_score': risk_score,
+        'growth_rate': growth_rate  # 증가율 추가
     }
 
 # 사이드바 입력
@@ -284,7 +554,7 @@ import_file = st.sidebar.text_input(
     help="import_volume.json 파일명 (같은 폴더에 있어야 함)"
 )
 
-# 국가 입력 - 기본값 공란으로 수정
+# 국가 입력
 origin_country = st.sidebar.text_input(
     "원산지국 (실제 생산국)",
     value="",
@@ -346,24 +616,31 @@ if st.sidebar.button("📊 분석 시작", type="primary"):
         st.markdown("---")
         
         # 세율차 계산
-        with st.spinner("세율차 분석 중..."):
+        with st.spinner("세율차 분석 중... (우선순위 적용)"):
             results = calculate_tariff_difference(tariff_data, origin_country, transit_country)
         
         if results:
-            # TOP10 선정 (세율차 → 원산지국 세율 기준 정렬)
+            # TOP10 선정 (절감률 → 원산지국 FTA 세율 기준 정렬)
             df_results = pd.DataFrame(results)
             df_results = df_results.sort_values(
-                by=['세율차', '원산지국_FTA', 'MFN'],
-                ascending=[False, False, False]
+                by=['절감률', '원산지국_FTA'],
+                ascending=[False, False]
             ).head(10)
             
             # 표1: TOP10 세율차 랭킹
-            st.subheader("📋 표1: TOP10 세율차 랭킹 (HS10 기준)")
+            st.subheader("📋 표1: TOP10 세율차 랭킹 (절감률 순, HS10 기준)")
             
             display_df = df_results.copy()
             display_df.insert(0, '순위', range(1, len(display_df) + 1))
             display_df['세율차'] = display_df['세율차'].round(2)
             display_df['절감률'] = display_df['절감률'].round(2).astype(str) + '%'
+            
+            # 협정명 표시를 위한 컬럼 재배치
+            column_order = ['순위', 'HS10', 'HS6', '품명', 'MFN', 
+                          '원산지국_FTA', '원산지_협정', 
+                          '경유국_FTA', '경유국_협정',
+                          '직수출세율', '우회세율', '세율차', '절감률']
+            display_df = display_df[column_order]
             
             st.dataframe(
                 display_df,
@@ -373,12 +650,12 @@ if st.sidebar.button("📊 분석 시작", type="primary"):
             
             st.markdown("---")
             
-            # 표2: 수입 추세 (우회위험도 높은 순으로 정렬)
-            st.subheader("📈 표2: 수입 추세 (HS6 기준) - 우회위험도 높은 순")
+            # 표2: 수입 추세 (증가율 높은 순으로 정렬)
+            st.subheader("📈 표2: 수입 추세 (HS6 기준) - 증가율 높은 순")
             
             trend_data = []
             
-            # 표1의 모든 품목(HS10)을 HS6로 변환하여 표시 (중복 제거 없이)
+            # 표1의 모든 품목(HS10)을 HS6로 변환하여 표시
             for _, row in df_results.iterrows():
                 hs6 = row['HS6']
                 product_name = row['품명']
@@ -392,15 +669,16 @@ if st.sidebar.button("📊 분석 시작", type="primary"):
                     '2023금액(천$)': f"{trend_info['2023']:.1f}",
                     '2024금액(천$)': f"{trend_info['2024']:.1f}",
                     "추이('22→'24)": trend_info['추이'],
+                    '증가율(%)': f"{trend_info['growth_rate']:.1f}",
                     '우회위험도': trend_info['위험도'],
-                    'risk_score': trend_info['risk_score']
+                    'growth_rate_raw': trend_info['growth_rate']  # 정렬용
                 })
             
             df_trend = pd.DataFrame(trend_data)
-            # 우회위험도 높은 순으로 정렬
-            df_trend = df_trend.sort_values(by='risk_score', ascending=False)
-            # risk_score 컬럼 제거
-            df_trend = df_trend.drop(columns=['risk_score'])
+            # 증가율 높은 순으로 정렬
+            df_trend = df_trend.sort_values(by='growth_rate_raw', ascending=False)
+            # growth_rate_raw 컬럼 제거 (정렬용이었음)
+            df_trend = df_trend.drop(columns=['growth_rate_raw'])
             
             st.dataframe(
                 df_trend,
@@ -440,9 +718,17 @@ if st.sidebar.button("📊 분석 시작", type="primary"):
             **📌 각주**
             - 단위: 수량=톤, 금액=천달러
             - 데이터 기준: 2025년 관세율, 2022-2024년 수입통계
-            - ASEAN 국가는 한-ASEAN 협정과 개별 FTA 협정 중 최소 세율 적용
-            - FTA 세율은 모든 가능한 협정 중 최소값으로 표시되며, 실제 적용세율은 min(MFN, FTA)로 계산됨
-            - 표2는 우회위험도(수입 증가 추세) 기준으로 정렬됨
+            - **세율 적용 우선순위**: 관세법 시행령에 따른 우선순위 적용
+            - **우선순위 체계**: 긴급관세 등(1순위) > FTA(2순위) > WTO협정(3순위) > 농림축산물양허관세(미추천)(4순위) > 기본세율(10순위)
+            - **MFN 세율**: FTA 특혜를 적용하지 않았을 때의 최소 적용 세율 (FTA 제외, W1 제외)
+            - **직수출/우회 세율**: MFN 후보 + FTA 후보를 모두 합쳐 우선순위 정렬 후 최우선 세율 적용
+            - **W1 제외**: 농림축산물양허관세(추천)은 추천받지 않았다는 전제로 분석에서 제외
+            - **W2 적용**: 농림축산물양허관세(미추천)은 기본세율보다 우선순위가 높아 자동 적용됨
+            - **증가율**: (2024년 금액 - 2022년 금액) / 2022년 금액 × 100
+            - ASEAN 국가는 한-ASEAN 협정과 개별 FTA 협정 중 우선순위가 높은 협정 적용
+            - 동일 우선순위 내에서는 세율이 낮은 협정 자동 선택
+            - 표1은 절감률 순으로 정렬됨
+            - 표2는 증가율 높은 순으로 정렬됨
             """)
             
         else:
@@ -454,11 +740,6 @@ else:
     ### 👋 환영합니다!
     
     이 챗봇은 **우회수입 세율차 분석**을 자동으로 수행합니다.
-    
-     **📱 모바일 이용 안내**
-    - 모바일에서는 화면 왼쪽 상단의 **>>(화살표)** 버튼을 눌러  
-      **사이드바를 열어야 입력창이 보입니다.**
-    - 메뉴 버튼이 안 보이면 화면을 약간 아래로 스크롤해보세요.
     
     **사용 방법:**
     1. 왼쪽 사이드바에서 데이터 파일 경로 확인/수정
@@ -474,9 +755,17 @@ else:
     - 수입 추세 분석 (HS6 기준, 우회위험도 높은 순)
     - 우회수입 위험도 평가
     
-    **📌 ASEAN 국가 분석 시:**
-    - 한-ASEAN 협정과 개별 FTA 협정 중 최소 세율이 자동으로 적용됩니다
+    **📌 주요 개선사항 (v3.4):**
+    - ✅ 관세법 시행령에 따른 **세율 적용 우선순위** 완전 반영
+    - ✅ **MFN 세율**: FTA 특혜 없이 적용 가능한 최소세율 (우선순위 적용)
+    - ✅ **직수출/우회 세율**: MFN + FTA 모두 합쳐 우선순위 정렬 후 최우선 세율 선택
+    - ✅ 긴급관세 등 > FTA > WTO협정 > **W2** > 기본세율 순으로 자동 적용
+    - ✅ **W1(WTO일반양허관세) 제외**: 추천받지 않았다는 전제
+    - ✅ **W2 자동 적용**: 기본세율보다 우선순위 높음
+    - ✅ ASEAN 국가의 경우 한-ASEAN과 개별 FTA 중 우선순위 높은 협정 자동 선택
+    - ✅ 동일 우선순위 내에서는 세율이 낮은 협정 선택
+    - ✅ 표1 정렬: 절감률 순
     """)
     
     st.markdown("---")
-    st.markdown("**📘 v3.1 (2025.10) | Powered by Streamlit | ASEAN 다중협정 지원**")
+    st.markdown("**📘 v4.1 (2025.12) | 표2 증가율 컬럼 추가 및 증가율 순 정렬**")
